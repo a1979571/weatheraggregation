@@ -1,0 +1,17 @@
+id:SYD001
+name:Sydney (Observatory Hill)
+state:NSW
+time_zone:AEST
+lat:-33.8675
+lon:151.2070
+local_date_time:15/04:00pm
+local_date_time_full:20250914160000
+air_temp:22.5
+apparent_t:21.0
+cloud:Sunny
+dewpt:10.2
+press:1012.8
+rel_hum:60
+wind_dir:E
+wind_spd_kmh:12
+wind_spd_kt:6
