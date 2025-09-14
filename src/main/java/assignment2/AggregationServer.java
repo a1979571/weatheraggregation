@@ -1,190 +1,258 @@
 package assignment2;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import com.google.gson.*;
+import com.google.gson.reflect.TypeToken;
 
 import java.io.*;
+import java.lang.reflect.Type;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.concurrent.locks.ReentrantLock;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 /**
- * AggregationServer
- *
- * Central server that aggregates weather data from multiple ContentServers
- * and serves GET requests to clients.
- * Ensures consistency using Lamport clocks and handles 30-second expiry.
+ * AggregationServer implementing socket-based REST-like API.
+ * Supports GET and PUT /weather.json requests with HTTP-like response codes.
+ * Manages Lamport clock, persistence, expiry of entries, and concurrency.
  */
 public class AggregationServer {
 
-    private static final int DEFAULT_PORT = 4567;
-    private static final String STORAGE_FILE = "weather_store.json";
+    private final Path feedFile;
+    public final List<WeatherEntry> weatherEntries;
+    private final Gson gson;
+    private final LamportClock lamportClock;
+    public ServerSocket serverSocket;
 
-    private final Map<String, WeatherEntry> store = new HashMap<>();
-    private final Map<String, Long> lastUpdate = new HashMap<>(); // track last contact
-    private final ReentrantLock lock = new ReentrantLock();
-    private final LamportClock lamportClock = new LamportClock();
-    private final PersistenceManager persistenceManager = new PersistenceManager(Paths.get(STORAGE_FILE));
-    private final Gson gson = new GsonBuilder().setPrettyPrinting().create();
+    private static final long EXPIRY_MILLIS = 30_000;
+    private static final int PORT_DEFAULT = 4567;
 
-    private final ScheduledExecutorService cleaner = Executors.newSingleThreadScheduledExecutor();
+    public AggregationServer(Path feedFile) throws IOException {
+        this.feedFile = feedFile;
+        this.weatherEntries = Collections.synchronizedList(new ArrayList<>());
+        this.lamportClock = new LamportClock();
 
-    public static void main(String[] args) {
-        int port = DEFAULT_PORT;
-        if (args.length >= 1) {
-            try { port = Integer.parseInt(args[0]); } catch (NumberFormatException ignored) {}
-        }
-        new AggregationServer().start(port);
+        this.gson = new GsonBuilder()
+                .registerTypeAdapter(Instant.class, (JsonSerializer<Instant>) (src, typeOfSrc, context) ->
+                        new JsonPrimitive(src.toString()))
+                .registerTypeAdapter(Instant.class, (JsonDeserializer<Instant>) (json, typeOfT, context) ->
+                        Instant.parse(json.getAsString()))
+                .setPrettyPrinting()
+                .create();
+
+        loadFeed();
     }
 
-    private void start(int port) {
-        loadStore();
-        startExpiryCleaner();
-
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Aggregation Server running on port " + port);
-
-            while (true) {
-                Socket client = serverSocket.accept();
-                new Thread(() -> handleClient(client)).start();
-            }
-
-        } catch (IOException e) {
-            e.printStackTrace();
+    private void loadFeed() throws IOException {
+        if (!feedFile.toFile().exists()) {
+            System.out.println("Feed file not found. Starting with empty list.");
+            return;
         }
+
+        try (FileReader reader = new FileReader(feedFile.toFile())) {
+            Type listType = new TypeToken<List<WeatherEntry>>() {}.getType();
+            List<WeatherEntry> loaded = gson.fromJson(reader, listType);
+            if (loaded != null) weatherEntries.addAll(loaded);
+        }
+        System.out.println("Loaded " + weatherEntries.size() + " weather entries from " + feedFile);
     }
 
-    // Load persisted store if exists
-    private void loadStore() {
-        try {
-            String json = persistenceManager.loadJson();
-            if (json != null && !json.isEmpty()) {
-                WeatherEntry[] entries = gson.fromJson(json, WeatherEntry[].class);
-                for (WeatherEntry entry : entries) {
-                    store.put(entry.getId(), entry);
-                    lastUpdate.put(entry.getId(), System.currentTimeMillis());
+    public synchronized void saveFeed() throws IOException {
+        try (FileWriter writer = new FileWriter(feedFile.toFile())) {
+            gson.toJson(weatherEntries, writer);
+        }
+        System.out.println("Saved " + weatherEntries.size() + " entries to " + feedFile);
+    }
+
+    /**
+     * Aggregate or update a weather entry.
+     * Updates Lamport timestamp and last updated time.
+     * @param newEntry entry to add or update
+     * @return true if new entry added, false if replaced
+     */
+    public boolean aggregateEntry(WeatherEntry newEntry) {
+        synchronized (weatherEntries) {
+            lamportClock.tick();
+            newEntry.setLamportTime(lamportClock.getTime());
+            newEntry.refreshLastUpdated();
+
+            for (int i = 0; i < weatherEntries.size(); i++) {
+                if (weatherEntries.get(i).getId().equals(newEntry.getId())) {
+                    weatherEntries.set(i, newEntry);
+                    return false; // replaced existing
                 }
             }
-        } catch (IOException e) {
-            System.err.println("Failed to load persisted store: " + e.getMessage());
+            weatherEntries.add(newEntry);
+            return true; // new added
         }
     }
 
-    // Periodically remove stale entries older than 30 seconds
-    private void startExpiryCleaner() {
-        cleaner.scheduleAtFixedRate(() -> {
+    /**
+     * Remove entries older than EXPIRY_MILLIS (30 seconds).
+     */
+    public void removeExpiredEntries() {
+        synchronized (weatherEntries) {
             long now = System.currentTimeMillis();
-            lock.lock();
-            try {
-                Iterator<Map.Entry<String, Long>> it = lastUpdate.entrySet().iterator();
-                while (it.hasNext()) {
-                    Map.Entry<String, Long> entry = it.next();
-                    if (now - entry.getValue() > 30_000) { // 30 seconds
-                        store.remove(entry.getKey());
-                        it.remove();
-                        System.out.println("Expired: " + entry.getKey());
-                    }
+            boolean removed = weatherEntries.removeIf(e -> now - e.getLastUpdatedEpoch() > EXPIRY_MILLIS);
+            if (removed) {
+                try {
+                    saveFeed();
+                } catch (IOException e) {
+                    System.err.println("Error saving feed after expiry cleanup: " + e.getMessage());
                 }
-                persistStore();
-            } finally {
-                lock.unlock();
             }
-        }, 5, 5, TimeUnit.SECONDS);
+        }
+    }
+
+    public void startServer(int port) throws IOException {
+        serverSocket = new ServerSocket(port);
+        System.out.println("AggregationServer running on port " + port);
+
+        // Schedule expiry cleanup every 10 seconds
+        Timer timer = new Timer(true);
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+                removeExpiredEntries();
+            }
+        }, 10000, 10000);
+
+        while (true) {
+            Socket client = serverSocket.accept();
+            new Thread(() -> handleClient(client)).start();
+        }
     }
 
     private void handleClient(Socket client) {
         try (BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
              BufferedWriter out = new BufferedWriter(new OutputStreamWriter(client.getOutputStream()))) {
 
-            String firstLine = in.readLine();
-            if (firstLine == null) return;
+            String requestLine = in.readLine();
+            if (requestLine == null) {
+                writeResponse(out, 400, "Bad Request");
+                return;
+            }
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 3) {
+                writeResponse(out, 400, "Bad Request");
+                return;
+            }
+            String method = parts[0];
+            String path = parts[1];
 
-            if (firstLine.startsWith("GET /weather")) {
-                sendWeatherEntries(out);
-            } else if (firstLine.startsWith("POST /weather")) {
-                StringBuilder body = new StringBuilder();
-                String line;
-                boolean isBody = false;
-                while ((line = in.readLine()) != null) {
-                    if (line.isEmpty()) {
-                        isBody = true; // Headers done
-                        continue;
-                    }
-                    if (isBody) body.append(line);
+            // Read headers to find Content-Length
+            int contentLength = 0;
+            String line;
+            while (!(line = in.readLine()).equals("")) {
+                if (line.toLowerCase().startsWith("content-length:")) {
+                    contentLength = Integer.parseInt(line.split(":")[1].trim());
                 }
-                receiveWeatherEntry(body.toString(), out);
-            } else {
-                sendStatus(out, 400, "Bad Request");
             }
 
-        } catch (IOException e) {
+            if (method.equalsIgnoreCase("GET") && path.equalsIgnoreCase("/weather.json")) {
+                handleGet(out);
+            } else if (method.equalsIgnoreCase("PUT") && path.equalsIgnoreCase("/weather.json")) {
+                // Read exact contentLength chars
+                char[] content = new char[contentLength];
+                int read = in.read(content, 0, contentLength);
+                if (read != contentLength) {
+                    writeResponse(out, 400, "Incomplete PUT body");
+                    return;
+                }
+                String payload = new String(content);
+                handlePutPayload(payload, out);
+            } else {
+                writeResponse(out, 400, "Unsupported Method or Path");
+            }
+
+        } catch (Exception e) {
             e.printStackTrace();
-        }
-    }
-
-    private void sendWeatherEntries(BufferedWriter out) throws IOException {
-        lock.lock();
-        try {
-            String json = gson.toJson(store.values());
-            out.write("HTTP/1.1 200 OK\r\n");
-            out.write("Content-Length: " + json.length() + "\r\n");
-            out.write("\r\n");
-            out.write(json);
-            out.flush();
         } finally {
-            lock.unlock();
+            try { client.close(); } catch (IOException ignored) {}
         }
     }
 
-    private void receiveWeatherEntry(String json, BufferedWriter out) throws IOException {
-        if (json == null || json.isEmpty()) {
-            sendStatus(out, 204, "No Content");
+    private void handlePutPayload(String payload, BufferedWriter out) throws IOException {
+        if (payload.isEmpty()) {
+            writeResponse(out, 204, "No Content");
             return;
         }
 
-        lock.lock();
         try {
-            WeatherEntry entry = gson.fromJson(json, WeatherEntry.class);
-            if (entry == null || entry.getId() == null || entry.getId().isEmpty()) {
-                sendStatus(out, 500, "Invalid JSON");
+            WeatherEntry newEntry = gson.fromJson(payload, WeatherEntry.class);
+            if (newEntry == null || newEntry.getId() == null || newEntry.getId().isEmpty()) {
+                writeResponse(out, 500, "Invalid JSON or Missing ID");
                 return;
             }
-
-            // Update Lamport clock
-            lamportClock.update(entry.getLamportTime());
-            entry.setLamportTime(lamportClock.tick());
-            entry.setTimestamp(System.currentTimeMillis());
-
-            boolean isNew = !store.containsKey(entry.getId());
-            store.put(entry.getId(), entry);
-            lastUpdate.put(entry.getId(), System.currentTimeMillis());
-            persistStore();
-
-            sendStatus(out, isNew ? 201 : 200, isNew ? "Created" : "OK");
-            System.out.println((isNew ? "Created" : "Updated") + ": " + entry);
-
-        } catch (Exception e) {
-            sendStatus(out, 500, "Internal Server Error");
-            e.printStackTrace();
-        } finally {
-            lock.unlock();
+            boolean addedNew = aggregateEntry(newEntry);
+            saveFeed();
+            writeResponse(out, addedNew ? 201 : 200, "OK");
+        } catch (JsonSyntaxException e) {
+            writeResponse(out, 500, "Invalid JSON Format");
         }
     }
 
-    private void persistStore() {
+    private void handleGet(BufferedWriter out) throws IOException {
+        synchronized (weatherEntries) {
+            String json = gson.toJson(weatherEntries);
+            writeResponse(out, 200, json);
+        }
+    }
+
+    private void handlePut(BufferedReader in, BufferedWriter out) throws IOException {
+        // Read JSON payload - for simplicity read until EOF or socket close
+        StringBuilder payload = new StringBuilder();
+        String line;
+        while ((line = in.readLine()) != null && !line.isEmpty()) {
+            payload.append(line);
+        }
+
+        if (payload.length() == 0) {
+            writeResponse(out, 204, "No Content");
+            return;
+        }
+
         try {
-            persistenceManager.saveJson(gson.toJson(store.values()));
-        } catch (IOException e) {
-            System.err.println("Failed to persist store: " + e.getMessage());
+            WeatherEntry newEntry = gson.fromJson(payload.toString(), WeatherEntry.class);
+            if (newEntry == null || newEntry.getId() == null || newEntry.getId().isEmpty()) {
+                writeResponse(out, 500, "Invalid JSON or Missing ID");
+                return;
+            }
+            boolean addedNew = aggregateEntry(newEntry);
+            saveFeed();
+            writeResponse(out, addedNew ? 201 : 200, "OK");
+        } catch (JsonSyntaxException e) {
+            writeResponse(out, 500, "Invalid JSON Format");
         }
     }
 
-    private void sendStatus(BufferedWriter out, int code, String message) throws IOException {
-        out.write("HTTP/1.1 " + code + " " + message + "\r\n");
+    private void writeResponse(BufferedWriter out, int statusCode, String body) throws IOException {
+        String statusText;
+        switch (statusCode) {
+            case 200: statusText = "OK"; break;
+            case 201: statusText = "Created"; break;
+            case 204: statusText = "No Content"; break;
+            case 400: statusText = "Bad Request"; break;
+            case 500: statusText = "Internal Server Error"; break;
+            default: statusText = "Error"; break;
+        }
+        out.write("HTTP/1.1 " + statusCode + " " + statusText + "\r\n");
+        out.write("Content-Type: application/json\r\n");
+        out.write("Content-Length: " + body.length() + "\r\n");
         out.write("\r\n");
+        out.write(body);
         out.flush();
+    }
+
+    public static void main(String[] args) throws IOException {
+        Path feedPath = (args.length < 1)
+                ? Path.of("feed.json")
+                : Path.of(args[0]);
+
+        AggregationServer server = new AggregationServer(feedPath);
+        server.startServer(args.length < 2 ? PORT_DEFAULT : Integer.parseInt(args[1]));
     }
 }
