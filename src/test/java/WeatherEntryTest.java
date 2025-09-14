@@ -1,31 +1,50 @@
+import assignment2.ContentServer;
+import assignment2.WeatherEntry;
 import org.junit.Test;
-import java.time.Instant;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import static org.junit.Assert.*;
 
 public class WeatherEntryTest {
 
     @Test
-    public void testGettersSetters() {
-        WeatherEntry entry = new WeatherEntry();
-        entry.setId("ID1");
-        entry.setAirTemp(25.5);
-        entry.setLamportTime(10);
+    public void testParseFromFileGson() throws IOException {
+        File tempFile = File.createTempFile("weather", ".txt");
+        try (FileWriter fw = new FileWriter(tempFile)) {
+            fw.write("id:IDS123\n");
+            fw.write("name:TestCity\n");
+            fw.write("state:TS\n");
+            fw.write("lat:10.5\n");
+            fw.write("lon:20.5\n");
+            fw.write("air_temp:25.4\n");
+        }
 
-        assertEquals("ID1", entry.getId());
-        assertEquals(25.5, entry.getAirTemp(), 0.001);
-        assertEquals(10, entry.getLamportTime());
+        WeatherEntry entry = ContentServer.parseFromFile(tempFile); // use Gson
+
+        assertEquals("IDS123", entry.getId());
+        assertEquals("TestCity", entry.getName());
+        assertEquals(10.5, entry.getLat(), 0.001);
+        assertEquals(25.4, entry.getAirTemp(), 0.001);
     }
 
     @Test
-    public void testLastUpdatedEpoch() {
-        WeatherEntry entry = new WeatherEntry();
-        long before = Instant.now().toEpochMilli();
-        entry.refreshLastUpdated();
-        long after = entry.getLastUpdatedEpoch();
-        assertTrue(after >= before);
+    public void testParseFromFileSimpleParser() throws IOException {
+        File tempFile = File.createTempFile("weather2", ".txt");
+        try (FileWriter fw = new FileWriter(tempFile)) {
+            fw.write("id:IDS456\n");
+            fw.write("name:AnotherCity\n");
+            fw.write("state:AC\n");
+            fw.write("lat:15.0\n");
+            fw.write("lon:25.0\n");
+            fw.write("air_temp:30.0\n");
+        }
 
-        // Test setter
-        entry.setLastUpdatedEpoch(123456789L);
-        assertEquals(123456789L, entry.getLastUpdatedEpoch());
+        WeatherEntry entry = ContentServer.parseFromFile(tempFile); // use SimpleJsonParser
+
+        assertEquals("IDS456", entry.getId());
+        assertEquals("AnotherCity", entry.getName());
+        assertEquals(15.0, entry.getLat(), 0.001);
+        assertEquals(30.0, entry.getAirTemp(), 0.001);
     }
 }
