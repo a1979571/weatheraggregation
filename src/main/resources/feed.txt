@@ -1,0 +1,7 @@
+{
+  "id": "SYD001",
+  "location": "Sydney (Observatory Hill)",
+  "condition": "Sunny",
+  "temperature": 22.5,
+  "lamportTime": 0
+}

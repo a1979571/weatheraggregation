@@ -1,5 +1,5 @@
 id:SYD001
-name:Sydney (Observatory Hill)
+name:Sydney 
 state:NSW
 time_zone:AEST
 lat:-33.8675

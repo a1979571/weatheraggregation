@@ -1,3 +1,4 @@
+import assignment2.LamportClock;
 import org.junit.Test;
 import static org.junit.Assert.*;
 

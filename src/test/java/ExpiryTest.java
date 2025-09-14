@@ -1,3 +1,4 @@
+import assignment2.WeatherEntry;
 import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;

@@ -1,3 +1,5 @@
+import assignment2.JsonUtils;
+import assignment2.WeatherEntry;
 import org.junit.Test;
 import java.io.File;
 import java.io.FileWriter;
