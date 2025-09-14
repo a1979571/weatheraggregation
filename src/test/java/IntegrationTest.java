@@ -1,13 +1,13 @@
-import assignment2.*;
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
+import assignment2.AggregationServer;
+import assignment2.ContentServer;
+import assignment2.GETClient;
+import assignment2.WeatherEntry;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.io.IOException;
-import java.lang.reflect.Type;
-import java.net.ServerSocket;
+import java.io.File;
+import java.io.FileWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -17,54 +17,60 @@ import static org.junit.Assert.*;
 public class IntegrationTest {
 
     private AggregationServer server;
-    private Thread serverThread;
     private Path tempFeed;
 
     @Before
-    public void setUp() throws IOException {
-        tempFeed = Files.createTempFile("feed", ".json");
+    public void setUp() throws Exception {
+        tempFeed = Files.createTempFile("feed", ".txt");
         server = new AggregationServer(tempFeed);
-
-        serverThread = new Thread(() -> {
+        new Thread(() -> {
             try {
-                server.startServer(0); // 0 = random free port
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        });
-        serverThread.setDaemon(true);
-        serverThread.start();
+                server.startServer(4567);
+            } catch (Exception ignored) {}
+        }).start();
 
-        // Wait for server to start
-        try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+        // Small delay to let server start
+        Thread.sleep(500);
     }
 
     @After
-    public void tearDown() throws IOException {
-        if (serverThread.isAlive()) serverThread.interrupt();
-        Files.deleteIfExists(tempFeed);
-    }
-
-    private int getServerPort() {
-        return server.serverSocket.getLocalPort();
+    public void tearDown() throws Exception {
+        if (server != null) {
+            server.serverSocket.close();
+        }
     }
 
     @Test
-    public void testPutAndGet() {
-        int port = getServerPort();
+    public void testContentServerPUTAndGET() throws Exception {
+        // Create temp weather file
+        File weatherFile = File.createTempFile("weather", ".txt");
+        try (FileWriter fw = new FileWriter(weatherFile)) {
+            fw.write("id:INT001\n");
+            fw.write("name:IntegrationCity\n");
+            fw.write("state:TS\n");
+            fw.write("lat:12.5\n");
+            fw.write("lon:45.0\n");
+            fw.write("air_temp:28.5\n");
+        }
 
-        WeatherEntry entry = new WeatherEntry();
-        entry.setId("INT001");
-        entry.setName("IntegrationCity");
+        // Parse using Gson (false) or SimpleJsonParser (true)
+        WeatherEntry entry = ContentServer.parseFromFile(weatherFile);
 
-        ContentServer cs = new ContentServer("localhost", port);
+        // Send PUT to server
+        ContentServer cs = new ContentServer("localhost", 4567);
         cs.sendWeatherUpdate(entry);
 
-        GETClient getClient = new GETClient("localhost", port);
-        getClient.getWeather(); // prints to stdout
+        // Small delay for server to process
+        Thread.sleep(500);
 
-        // Verify directly from server list
-        assertEquals(1, server.weatherEntries.size());
-        assertEquals("IntegrationCity", server.weatherEntries.get(0).getName());
+        // GET from server
+        GETClient client = new GETClient("localhost", 4567);
+        client.getWeather();
+
+        // Check that server contains the entry
+        List<WeatherEntry> entries = server.weatherEntries;
+        assertEquals(1, entries.size());
+        assertEquals("INT001", entries.get(0).getId());
+        assertEquals("IntegrationCity", entries.get(0).getName());
     }
 }

@@ -1,17 +1,19 @@
-id:SYD001
-name:Sydney
-state:NSW
-time_zone:AEST
-lat:-33.8675
-lon:151.2070
-local_date_time:15/04:00pm
-local_date_time_full:20250914160000
-air_temp:22.5
-apparent_t:21.0
-cloud:Sunny
-dewpt:10.2
-press:1012.8
-rel_hum:60
-wind_dir:E
-wind_spd_kmh:12
-wind_spd_kt:6
+[
+  {
+    "id": "ID1",
+    "name": "City1",
+    "state": "CA",
+    "lat": "37.7749",
+    "lon": "-122.4194",
+    "air_temp": "22",
+    "apparent_t": "21",
+    "cloud": "clear",
+    "dewpt": "12",
+    "press": "1013",
+    "rel_hum": "50",
+    "wind_dir": "NW",
+    "wind_spd_kmh": "10",
+    "wind_spd_kt": "5",
+    "lamportTime": "0"
+  }
+]

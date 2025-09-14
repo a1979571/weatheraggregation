@@ -1,5 +1,4 @@
 package assignment2;
-import com.google.gson.Gson;
 
 import java.io.*;
 import java.net.Socket;
@@ -14,7 +13,6 @@ public class ContentServer {
 
     private final String serverHost;
     private final int serverPort;
-    private final Gson gson = new Gson();
 
     public ContentServer(String host, int port) {
         this.serverHost = host;
@@ -24,12 +22,14 @@ public class ContentServer {
     public void sendWeatherUpdate(WeatherEntry entry) {
         int maxRetries = 3;
         int retryDelayMs = 2000;
+
+        String json = JsonParser.toJson(entry); // Use custom JsonParser
+
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try (Socket socket = new Socket(serverHost, serverPort);
                  BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
                  BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
-                String json = gson.toJson(entry);
                 String request = "PUT /weather.json HTTP/1.1\r\n" +
                         "User-Agent: ContentServer/1.0\r\n" +
                         "Content-Type: application/json\r\n" +
@@ -59,6 +59,7 @@ public class ContentServer {
                 Thread.sleep(retryDelayMs);
             } catch (InterruptedException ignored) {}
         }
+
         System.out.println("Failed to send weather update after retries.");
     }
 
@@ -104,6 +105,7 @@ public class ContentServer {
             System.err.println("Usage: ContentServer <host> <port> <weather_data_file>");
             System.exit(1);
         }
+
         String host = args[0];
         int port = Integer.parseInt(args[1]);
         String filename = args[2];

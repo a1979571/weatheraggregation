@@ -1,16 +1,13 @@
 package assignment2;
-import com.google.gson.Gson;
-import com.google.gson.reflect.TypeToken;
 
 import java.io.*;
-import java.lang.reflect.Type;
 import java.net.Socket;
 import java.util.List;
+import java.util.Map;
 
 public class GETClient {
     private final String serverHost;
     private final int serverPort;
-    private final Gson gson = new Gson();
 
     public GETClient(String host, int port) {
         this.serverHost = host;
@@ -20,11 +17,13 @@ public class GETClient {
     public void getWeather() {
         int maxRetries = 3;
         int retryDelayMs = 2000;
+
         for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try (Socket socket = new Socket(serverHost, serverPort);
                  BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
                  BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
 
+                // Send GET request
                 String request = "GET /weather.json HTTP/1.1\r\n" +
                         "User-Agent: GETClient/1.0\r\n" +
                         "\r\n";
@@ -38,7 +37,7 @@ public class GETClient {
                     throw new IOException("Bad response");
                 }
 
-                // Read headers and find Content-Length
+                // Read headers to find Content-Length
                 int contentLength = 0;
                 String line;
                 while ((line = in.readLine()) != null && !line.trim().isEmpty()) {
@@ -46,7 +45,8 @@ public class GETClient {
                         contentLength = Integer.parseInt(line.split(":")[1].trim());
                     }
                 }
-                // Read exactly contentLength characters for JSON body
+
+                // Read JSON body
                 char[] content = new char[contentLength];
                 int totalRead = 0;
                 while (totalRead < contentLength) {
@@ -56,12 +56,20 @@ public class GETClient {
                 }
 
                 String json = new String(content, 0, totalRead);
-                Type listType = new TypeToken<List<WeatherEntry>>() {}.getType();
-                List<WeatherEntry> entries = gson.fromJson(json, listType);
 
-                for (WeatherEntry e : entries) {
-                    System.out.println(e);
+                // Parse JSON array to List<WeatherEntry>
+                List<Map<String, String>> list = JsonParser.parseArray(json);
+                for (Map<String, String> map : list) {
+                    WeatherEntry e = WeatherEntry.fromMap(map);
+                    System.out.println("ID: " + e.getId() +
+                            ", Name: " + e.getName() +
+                            ", State: " + e.getState() +
+                            ", Lat: " + e.getLat() +
+                            ", Lon: " + e.getLon() +
+                            ", Temp: " + e.getAirTemp() +
+                            ", Lamport: " + e.getLamportTime());
                 }
+
                 return; // success
 
             } catch (IOException e) {
@@ -72,6 +80,7 @@ public class GETClient {
                 Thread.sleep(retryDelayMs);
             } catch (InterruptedException ignored) {}
         }
+
         System.out.println("Failed to GET weather data after retries.");
     }
 
@@ -80,6 +89,7 @@ public class GETClient {
             System.err.println("Usage: GETClient <host> <port>");
             System.exit(1);
         }
+
         String host = args[0];
         int port = Integer.parseInt(args[1]);
 
